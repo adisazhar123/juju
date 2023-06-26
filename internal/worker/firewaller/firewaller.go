@@ -5,7 +5,6 @@ package firewaller
 
 import (
 	stdcontext "context"
-	"io"
 	"sort"
 	"time"
 
@@ -21,8 +20,6 @@ import (
 	"gopkg.in/macaroon.v2"
 
 	"github.com/juju/juju/api"
-	"github.com/juju/juju/api/controller/firewaller"
-	"github.com/juju/juju/api/controller/remoterelations"
 	"github.com/juju/juju/core/instance"
 	"github.com/juju/juju/core/life"
 	"github.com/juju/juju/core/network"
@@ -31,63 +28,10 @@ import (
 	"github.com/juju/juju/core/watcher"
 	"github.com/juju/juju/environs"
 	"github.com/juju/juju/environs/config"
-	"github.com/juju/juju/environs/context"
 	"github.com/juju/juju/environs/instances"
-	"github.com/juju/juju/environs/models"
 	"github.com/juju/juju/internal/worker/common"
 	"github.com/juju/juju/rpc/params"
 )
-
-// FirewallerAPI exposes functionality off the firewaller API facade to a worker.
-type FirewallerAPI interface {
-	WatchModelMachines() (watcher.StringsWatcher, error)
-	WatchOpenedPorts() (watcher.StringsWatcher, error)
-	WatchModelFirewallRules() (watcher.NotifyWatcher, error)
-	ModelFirewallRules() (firewall.IngressRules, error)
-	ModelConfig() (*config.Config, error)
-	Machine(tag names.MachineTag) (*firewaller.Machine, error)
-	Unit(tag names.UnitTag) (*firewaller.Unit, error)
-	Relation(tag names.RelationTag) (*firewaller.Relation, error)
-	WatchEgressAddressesForRelation(tag names.RelationTag) (watcher.StringsWatcher, error)
-	WatchIngressAddressesForRelation(tag names.RelationTag) (watcher.StringsWatcher, error)
-	ControllerAPIInfoForModel(modelUUID string) (*api.Info, error)
-	MacaroonForRelation(relationKey string) (*macaroon.Macaroon, error)
-	SetRelationStatus(relationKey string, status relation.Status, message string) error
-	AllSpaceInfos() (network.SpaceInfos, error)
-	WatchSubnets() (watcher.StringsWatcher, error)
-}
-
-// CrossModelFirewallerFacade exposes firewaller functionality on the
-// remote offering model to a worker.
-type CrossModelFirewallerFacade interface {
-	PublishIngressNetworkChange(params.IngressNetworksChangeEvent) error
-	WatchEgressAddressesForRelation(details params.RemoteEntityArg) (watcher.StringsWatcher, error)
-}
-
-// RemoteFirewallerAPICloser implements CrossModelFirewallerFacade
-// and adds a Close() method.
-type CrossModelFirewallerFacadeCloser interface {
-	io.Closer
-	CrossModelFirewallerFacade
-}
-
-// EnvironFirewaller defines methods to allow the worker to perform
-// firewall operations (open/close ports) on a Juju global firewall.
-type EnvironFirewaller interface {
-	environs.Firewaller
-}
-
-// EnvironModelFirewaller defines methods to allow the worker to
-// perform firewall operations (open/close port) on a Juju model firewall.
-type EnvironModelFirewaller interface {
-	models.ModelFirewaller
-}
-
-// EnvironInstances defines methods to allow the worker to perform
-// operations on instances in a Juju cloud environment.
-type EnvironInstances interface {
-	Instances(ctx context.ProviderCallContext, ids []instance.Id) ([]instances.Instance, error)
-}
 
 type newCrossModelFacadeFunc func(*api.Info) (CrossModelFirewallerFacadeCloser, error)
 
@@ -96,7 +40,7 @@ type Config struct {
 	ModelUUID              string
 	Mode                   string
 	FirewallerAPI          FirewallerAPI
-	RemoteRelationsApi     *remoterelations.Client
+	RemoteRelationsApi     RemoteRelationsAPI
 	EnvironFirewaller      EnvironFirewaller
 	EnvironModelFirewaller EnvironModelFirewaller
 	EnvironInstances       EnvironInstances
@@ -109,7 +53,8 @@ type Config struct {
 
 	CredentialAPI common.CredentialAPI
 
-	// TODO: (jack-w-shaw) Drop these once we move tests to mocks based
+	// These are used to coordinate gomock tests.
+
 	// WatchMachineNotify is called when the Firewaller starts watching the
 	// machine with the given tag (manual machines aren't watched). This
 	// should only be used for testing.
@@ -120,6 +65,9 @@ type Config struct {
 	// SkipFlushModelNotify is called when the Firewaller skips flushing it's model.
 	// This should only be used for testing.
 	SkipFlushModelNotify func()
+	// FlushMMachineNotify is called when the Firewaller flushes a machine.
+	// This should only be used for testing
+	FlushMachineNotify func(string)
 }
 
 // Validate returns an error if cfg cannot drive a Worker.
@@ -157,7 +105,7 @@ func (cfg Config) Validate() error {
 type Firewaller struct {
 	catacomb               catacomb.Catacomb
 	firewallerApi          FirewallerAPI
-	remoteRelationsApi     *remoterelations.Client
+	remoteRelationsApi     RemoteRelationsAPI
 	environFirewaller      EnvironFirewaller
 	environModelFirewaller EnvironModelFirewaller
 	environInstances       EnvironInstances
@@ -194,6 +142,7 @@ type Firewaller struct {
 	// Only used for testing
 	watchMachineNotify   func(tag names.MachineTag)
 	flushModelNotify     func()
+	flushMachineNotify   func(string)
 	skipFlushModelNotify func()
 }
 
@@ -239,6 +188,7 @@ func NewFirewaller(cfg Config) (worker.Worker, error) {
 		cloudCallContextFunc: common.NewCloudCallContextFunc(cfg.CredentialAPI),
 		watchMachineNotify:   cfg.WatchMachineNotify,
 		flushModelNotify:     cfg.FlushModelNotify,
+		flushMachineNotify:   cfg.FlushMachineNotify,
 		skipFlushModelNotify: cfg.SkipFlushModelNotify,
 	}
 
@@ -574,7 +524,7 @@ func (fw *Firewaller) startMachine(tag names.MachineTag) error {
 // startUnit creates a new data value for tracking details of the unit
 // The provided machineTag must be the tag for the machine the unit was last
 // observed to be assigned to.
-func (fw *Firewaller) startUnit(unit *firewaller.Unit, machineTag names.MachineTag) error {
+func (fw *Firewaller) startUnit(unit Unit, machineTag names.MachineTag) error {
 	application, err := unit.Application()
 	if err != nil {
 		return err
@@ -611,7 +561,7 @@ func (fw *Firewaller) startUnit(unit *firewaller.Unit, machineTag names.MachineT
 
 // startApplication creates a new data value for tracking details of the
 // application and starts watching the application for exposure changes.
-func (fw *Firewaller) startApplication(app *firewaller.Application) error {
+func (fw *Firewaller) startApplication(app Application) error {
 	exposed, exposedEndpoints, err := app.ExposeInfo()
 	if err != nil {
 		return err
@@ -867,6 +817,11 @@ func (fw *Firewaller) flushMachine(machined *machineData) error {
 		}
 	}
 
+	defer func() {
+		if fw.flushMachineNotify != nil {
+			fw.flushMachineNotify(machined.tag.Id())
+		}
+	}()
 	want, err := fw.gatherIngressRules(machined)
 	if err != nil {
 		return errors.Trace(err)
@@ -1172,7 +1127,7 @@ func (fw *Firewaller) flushInstancePorts(machined *machineData, toOpen, toClose 
 	// This is important because when a machine is first created,
 	// it will have no instance id but also no open ports -
 	// InstanceId will fail but we don't care.
-	fw.logger.Debugf("flush instance ports: to open %v, to close %v", toOpen, toClose)
+	fw.logger.Debugf("flush instance ports for %v: to open %v, to close %v", machined.tag.String(), toOpen, toClose)
 	if len(toOpen) == 0 && len(toClose) == 0 {
 		return nil
 	}
@@ -1319,7 +1274,7 @@ type machineData struct {
 	openedPortRangesByEndpoint map[names.UnitTag]network.GroupedPortRanges
 }
 
-func (md *machineData) machine() (*firewaller.Machine, error) {
+func (md *machineData) machine() (Machine, error) {
 	return md.fw.firewallerApi.Machine(md.tag)
 }
 
@@ -1359,7 +1314,7 @@ func (md *machineData) Wait() error {
 type unitData struct {
 	fw           *Firewaller
 	tag          names.UnitTag
-	unit         *firewaller.Unit
+	unit         Unit
 	applicationd *applicationData
 	machined     *machineData
 }
@@ -1375,7 +1330,7 @@ type exposedChange struct {
 type applicationData struct {
 	catacomb         catacomb.Catacomb
 	fw               *Firewaller
-	application      *firewaller.Application
+	application      Application
 	exposed          bool
 	exposedEndpoints map[string]params.ExposedEndpoint
 	unitds           map[names.UnitTag]*unitData
@@ -1553,16 +1508,17 @@ func (fw *Firewaller) startRelation(rel *params.RemoteRelation, role charm.Relat
 		remoteModelUUID:     rel.SourceModelUUID,
 		localApplicationTag: names.NewApplicationTag(rel.ApplicationName),
 		endpointRole:        role,
+		isOffer:             remoteAppResult.Result.IsConsumerProxy,
 		relationReady:       make(chan remoteRelationInfo),
 	}
 
 	// Start the worker which will watch the remote relation for things like new networks.
-	// We use ReplaceWorker since the relation may have been removed and we are re-adding it.
 	if err := fw.relationWorkerRunner.StartWorker(tag.Id(), func() (worker.Worker, error) {
 		// This may be a restart after an api error, so ensure any previous
 		// worker is killed and the catacomb is reset.
 		data.Kill()
 		data.catacomb = catacomb.Catacomb{}
+
 		if err := catacomb.Invoke(catacomb.Plan{
 			Site: &data.catacomb,
 			Work: data.watchLoop,
@@ -1575,7 +1531,6 @@ func (fw *Firewaller) startRelation(rel *params.RemoteRelation, role charm.Relat
 	}
 	fw.relationIngress[tag] = data
 
-	data.isOffer = remoteAppResult.Result.IsConsumerProxy
 	return fw.startRelationPoller(rel.Key, rel.RemoteApplicationName, data.relationReady)
 }
 
