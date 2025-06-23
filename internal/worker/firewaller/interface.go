@@ -7,7 +7,6 @@ import (
 	"github.com/juju/names/v5"
 	"io"
 
-	"github.com/juju/names/v4"
 	"gopkg.in/macaroon.v2"
 
 	"github.com/juju/juju/api"

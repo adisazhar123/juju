@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/juju/names/v5"
 	"go.uber.org/mock/gomock"
+	"log"
 	"strconv"
 	"sync"
 	"time"
@@ -115,7 +116,7 @@ func (s *firewallerBaseSuite) SetUpTest(c *gc.C) {
 
 var _ worker.Worker = (*firewaller.Firewaller)(nil)
 
-func (s *firewallerBaseSuite) ensureMocks(c *gc.C, ctrl *gomock.Controller) {
+func (s *firewallerBaseSuite) ensureMocks(c *gc.C, ctrl *gomock.Controller, wg *sync.WaitGroup) {
 	if s.firewaller != nil {
 		return
 	}
@@ -139,7 +140,7 @@ func (s *firewallerBaseSuite) ensureMocks(c *gc.C, ctrl *gomock.Controller) {
 	s.modelFwRulesCh = make(chan struct{}, 5)
 
 	// This is the controller machine.
-	m, _ := s.addMachine(ctrl)
+	m, _ := s.addMachine(ctrl, wg)
 	inst := s.startInstance(c, ctrl, m)
 	inst.EXPECT().IngressRules(gomock.Any(), m.Tag().Id()).Return(nil, nil).AnyTimes()
 
@@ -149,7 +150,13 @@ func (s *firewallerBaseSuite) ensureMocks(c *gc.C, ctrl *gomock.Controller) {
 
 	// Initial event.
 	if s.withModelFirewaller {
-		s.modelFwRulesCh <- struct{}{}
+		log.Println("[ensureMocks] sending initial event to modelFwRulesCh")
+		go func() {
+			log.Println("waiting...")
+			//wg.Wait()
+			log.Println("done waiting")
+			s.modelFwRulesCh <- struct{}{}
+		}()
 	}
 }
 
@@ -239,11 +246,11 @@ func (s *firewallerBaseSuite) waitForMachine(c *gc.C, id string) {
 	}
 }
 
-func (s *firewallerBaseSuite) addMachine(ctrl *gomock.Controller) (*mocks.MockMachine, chan []string) {
-	return s.addModelMachine(ctrl, false)
+func (s *firewallerBaseSuite) addMachine(ctrl *gomock.Controller, wg *sync.WaitGroup) (*mocks.MockMachine, chan []string) {
+	return s.addModelMachine(ctrl, false, wg)
 }
 
-func (s *firewallerBaseSuite) addModelMachine(ctrl *gomock.Controller, manual bool) (*mocks.MockMachine, chan []string) {
+func (s *firewallerBaseSuite) addModelMachine(ctrl *gomock.Controller, manual bool, wg *sync.WaitGroup) (*mocks.MockMachine, chan []string) {
 	id := strconv.Itoa(s.nextMachineId)
 	s.nextMachineId++
 
@@ -270,7 +277,14 @@ func (s *firewallerBaseSuite) addModelMachine(ctrl *gomock.Controller, manual bo
 	}
 
 	// Add a machine.
-	s.machinesCh <- []string{tag.Id()}
+	log.Println("[addModelMachine] adding machine with id: ", tag.Id())
+
+	wg.Add(1)
+	go func() {
+		s.machinesCh <- []string{tag.Id()}
+		time.Sleep(3 * time.Second)
+		wg.Done()
+	}()
 
 	// Only expect flush when firewaller starts and for first machine.
 	if tag.Id() == "0" && s.withModelFirewaller {
@@ -295,7 +309,8 @@ func (s *firewallerBaseSuite) addUnit(c *gc.C, ctrl *gomock.Controller, app *moc
 	unitId := s.nextUnitId[app.Name()]
 	s.nextUnitId[app.Name()] = unitId + 1
 	unitTag := names.NewUnitTag(fmt.Sprintf("%s/%d", app.Name(), unitId))
-	m, unitsCh := s.addMachine(ctrl)
+	var wg sync.WaitGroup
+	m, unitsCh := s.addMachine(ctrl, &wg)
 	u := mocks.NewMockUnit(ctrl)
 	s.firewaller.EXPECT().Unit(unitTag).Return(u, nil).AnyTimes()
 	u.EXPECT().Life().Return(life.Alive)
@@ -320,16 +335,19 @@ func (s *firewallerBaseSuite) addUnit(c *gc.C, ctrl *gomock.Controller, app *moc
 	return u, m, unitsCh
 }
 
-func (s *firewallerBaseSuite) newFirewaller(c *gc.C, ctrl *gomock.Controller) worker.Worker {
-	s.ensureMocks(c, ctrl)
+func (s *firewallerBaseSuite) newFirewaller(c *gc.C, ctrl *gomock.Controller, wg *sync.WaitGroup) worker.Worker {
+	s.ensureMocks(c, ctrl, wg)
 
 	flushMachineNotify := func(id string) {
+		log.Println("in flushMachineNotify")
 		s.machineFlushed <- id
 	}
 	flushModelNotify := func() {
+		log.Println("in flushModelNotify")
 		s.modelFlushed <- true
 	}
 	watchMachineNotify := func(tag names.MachineTag) {
+		log.Println("in watchMachineNotify")
 		s.watchingMachine <- tag
 	}
 
@@ -400,6 +418,7 @@ func (s *firewallerBaseSuite) newFirewaller(c *gc.C, ctrl *gomock.Controller) wo
 
 	fw, err := firewaller.NewFirewaller(cfg)
 	c.Assert(err, jc.ErrorIsNil)
+	log.Println("new fw here")
 
 	select {
 	case <-initialised:
@@ -518,7 +537,8 @@ func (s *InstanceModeSuite) TestStartStop(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	s.waitForMachine(c, "0")
 	// Initial run.
 	s.waitForModelFlush(c)
@@ -531,8 +551,9 @@ func (s *InstanceModeSuite) TestStartStopWithoutModelFirewaller(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
+	var wg sync.WaitGroup
 	s.withModelFirewaller = false
-	fw := s.newFirewaller(c, ctrl)
+	fw := s.newFirewaller(c, ctrl, &wg)
 	s.waitForMachine(c, "0")
 	workertest.CleanKill(c, fw)
 }
@@ -541,7 +562,8 @@ func (s *InstanceModeSuite) TestNotExposedApplication(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	app := s.addApplication(ctrl, "wordpress", true)
@@ -553,8 +575,9 @@ func (s *InstanceModeSuite) TestNotExposedApplicationWithoutModelFirewaller(c *g
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
+	var wg sync.WaitGroup
 	s.withModelFirewaller = false
-	fw := s.newFirewaller(c, ctrl)
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	app := s.addApplication(ctrl, "wordpress", false)
@@ -566,7 +589,8 @@ func (s *InstanceModeSuite) TestExposedApplication(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	app := s.addApplication(ctrl, "wordpress", true)
@@ -596,7 +620,8 @@ func (s *InstanceModeSuite) TestMultipleExposedApplications(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	app1 := s.addApplication(ctrl, "wordpress", true)
@@ -643,7 +668,8 @@ func (s *InstanceModeSuite) TestMachineWithoutInstanceId(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	app := s.addApplication(ctrl, "wordpress", true)
@@ -674,7 +700,8 @@ func (s *InstanceModeSuite) TestMultipleUnits(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	app := s.addApplication(ctrl, "wordpress", true)
@@ -712,7 +739,8 @@ func (s *InstanceModeSuite) TestStartWithState(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	s.ensureMocks(c, ctrl)
+	var wg sync.WaitGroup
+	s.ensureMocks(c, ctrl, &wg)
 
 	app := s.addApplication(ctrl, "wordpress", true)
 	u, m, _ := s.addUnit(c, ctrl, app)
@@ -727,7 +755,7 @@ func (s *InstanceModeSuite) TestStartWithState(c *gc.C) {
 	s.assertIngressRules(c, m.Tag().Id(), nil)
 
 	// Starting the firewaller opens the ports.
-	fw := s.newFirewaller(c, ctrl)
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	s.assertIngressRules(c, m.Tag().Id(), firewall.IngressRules{
@@ -740,12 +768,13 @@ func (s *InstanceModeSuite) TestStartWithPartialState(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	s.ensureMocks(c, ctrl)
+	var wg sync.WaitGroup
+	s.ensureMocks(c, ctrl, &wg)
 
 	app := s.addApplication(ctrl, "wordpress", true)
 
 	// Starting the firewaller, no open ports.
-	fw := s.newFirewaller(c, ctrl)
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	s.assertIngressRules(c, "1", nil)
@@ -766,7 +795,8 @@ func (s *InstanceModeSuite) TestStartWithUnexposedApplication(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	s.ensureMocks(c, ctrl)
+	var wg sync.WaitGroup
+	s.ensureMocks(c, ctrl, &wg)
 
 	app := s.addApplication(ctrl, "wordpress", false)
 	u, m, _ := s.addUnit(c, ctrl, app)
@@ -777,7 +807,7 @@ func (s *InstanceModeSuite) TestStartWithUnexposedApplication(c *gc.C) {
 	})
 
 	// Starting the firewaller, no open ports.
-	fw := s.newFirewaller(c, ctrl)
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	s.assertIngressRules(c, m.Tag().Id(), nil)
@@ -796,13 +826,13 @@ func (s *InstanceModeSuite) TestStartMachineWithManualMachine(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	// Wait for controller (started by setUpTest)
 	s.waitForMachine(c, "0")
-
-	s.addModelMachine(ctrl, true)
+	s.addModelMachine(ctrl, true, &wg)
 
 	select {
 	case tag := <-s.watchingMachine:
@@ -810,7 +840,7 @@ func (s *InstanceModeSuite) TestStartMachineWithManualMachine(c *gc.C) {
 	case <-time.After(coretesting.ShortWait):
 	}
 
-	m, _ := s.addMachine(ctrl)
+	m, _ := s.addMachine(ctrl, &wg)
 	s.waitForMachine(c, m.Tag().Id())
 }
 
@@ -818,17 +848,21 @@ func (s *InstanceModeSuite) TestFlushModelAfterFirstMachineOnly(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
+	log.Println("1")
 
 	// Initial event from machine watcher
 	s.waitForModelFlush(c)
+	log.Println("2")
 
 	// Initial event from model firewall watcher
 	s.waitForModelFlush(c)
+	log.Println("3")
 
-	s.addMachine(ctrl)
-
+	s.addMachine(ctrl, &wg)
+	log.Println("4")
 	// Since the initial event successfully configured the model firewall
 	// the next machine shouldn't trigger a model flush
 	select {
@@ -842,7 +876,8 @@ func (s *InstanceModeSuite) TestSetClearExposedApplication(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	app := s.addApplication(ctrl, "wordpress", false)
@@ -879,7 +914,8 @@ func (s *InstanceModeSuite) TestRemoveUnit(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	app := s.addApplication(ctrl, "wordpress", true)
@@ -917,7 +953,8 @@ func (s *InstanceModeSuite) TestRemoveApplication(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	app := s.addApplication(ctrl, "wordpress", true)
@@ -948,7 +985,8 @@ func (s *InstanceModeSuite) TestRemoveMultipleApplications(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	app1 := s.addApplication(ctrl, "wordpress", true)
@@ -1006,7 +1044,8 @@ func (s *InstanceModeSuite) TestDeadMachine(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	app := s.addApplication(ctrl, "wordpress", true)
@@ -1042,7 +1081,8 @@ func (s *InstanceModeSuite) TestRemoveMachine(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 
 	app := s.addApplication(ctrl, "wordpress", true)
 	u, m, unitsCh := s.addUnit(c, ctrl, app)
@@ -1082,7 +1122,8 @@ func (s *InstanceModeSuite) TestStartWithStateOpenPortsBroken(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	s.ensureMocks(c, ctrl)
+	var wg sync.WaitGroup
+	s.ensureMocks(c, ctrl, &wg)
 
 	app := s.addApplication(ctrl, "wordpress", true)
 	u, m, _ := s.addUnit(c, ctrl, app)
@@ -1110,7 +1151,7 @@ func (s *InstanceModeSuite) TestStartWithStateOpenPortsBroken(c *gc.C) {
 	// Starting the firewaller should attempt to open the ports,
 	// and fail due to the method being broken.
 	// Starting the firewaller opens the ports.
-	fw := s.newFirewaller(c, ctrl)
+	fw := s.newFirewaller(c, ctrl, &wg)
 
 	s.waitForModelFlush(c)
 
@@ -1135,7 +1176,8 @@ func (s *InstanceModeSuite) TestDefaultModelFirewall(c *gc.C) {
 		firewall.NewIngressRule(network.MustParsePortRange("17070"), firewall.AllNetworksIPV4CIDR, firewall.AllNetworksIPV6CIDR),
 	}
 
-	s.ensureMocks(c, ctrl)
+	var wg sync.WaitGroup
+	s.ensureMocks(c, ctrl, &wg)
 
 	s.envModelFirewaller.EXPECT().OpenModelPorts(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.ProviderCallContext, rules firewall.IngressRules) error {
 		add, _ := s.envModelPorts.Diff(rules)
@@ -1143,7 +1185,7 @@ func (s *InstanceModeSuite) TestDefaultModelFirewall(c *gc.C) {
 		return nil
 	}).AnyTimes()
 
-	fw := s.newFirewaller(c, ctrl)
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	s.waitForModelFlush(c)
@@ -1160,7 +1202,8 @@ func (s *InstanceModeSuite) TestConfigureModelFirewall(c *gc.C) {
 		firewall.NewIngressRule(network.MustParsePortRange("17070"), firewall.AllNetworksIPV4CIDR),
 	}
 
-	s.ensureMocks(c, ctrl)
+	var wg sync.WaitGroup
+	s.ensureMocks(c, ctrl, &wg)
 
 	s.envModelFirewaller.EXPECT().OpenModelPorts(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.ProviderCallContext, rules firewall.IngressRules) error {
 		s.mu.Lock()
@@ -1170,7 +1213,7 @@ func (s *InstanceModeSuite) TestConfigureModelFirewall(c *gc.C) {
 		return nil
 	}).AnyTimes()
 
-	fw := s.newFirewaller(c, ctrl)
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	s.assertModelIngressRules(c, s.modelIngressRules)
@@ -1247,7 +1290,8 @@ func (s *InstanceModeSuite) TestRemoteRelationRequirerRoleConsumingSide(c *gc.C)
 	defer ctrl.Finish()
 
 	// Create the firewaller facade on the consuming model.
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	published := make(chan bool)
@@ -1303,7 +1347,8 @@ func (s *InstanceModeSuite) TestRemoteRelationWorkerError(c *gc.C) {
 
 	// Create the firewaller facade on the consuming model.
 	s.clock = testclock.NewClock(time.Now())
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	published := make(chan bool)
@@ -1359,7 +1404,8 @@ func (s *InstanceModeSuite) TestRemoteRelationProviderRoleConsumingSide(c *gc.C)
 	defer ctrl.Finish()
 
 	// Create the firewaller facade on the consuming model.
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	app := s.addApplication(ctrl, "mysql", true)
@@ -1439,7 +1485,8 @@ func (s *InstanceModeSuite) TestRemoteRelationIngressRejected(c *gc.C) {
 	defer ctrl.Finish()
 
 	// Create the firewaller facade on the consuming model.
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	app := s.addApplication(ctrl, "mysql", true)
@@ -1524,7 +1571,8 @@ func (s *InstanceModeSuite) TestRemoteRelationIngressRejected(c *gc.C) {
 
 func (s *InstanceModeSuite) assertIngressCidrs(c *gc.C, ctrl *gomock.Controller, ingress []string, expected []string) {
 	// Create the firewaller facade on the offering model.
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	// Set up the offering model - create the local app.
@@ -1637,7 +1685,8 @@ func (s *InstanceModeSuite) TestRemoteRelationIngressFallbackToWhitelist(c *gc.C
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	s.ensureMocks(c, ctrl)
+	var wg sync.WaitGroup
+	s.ensureMocks(c, ctrl, &wg)
 
 	attr := map[string]interface{}{
 		"name":               "name",
@@ -1697,7 +1746,8 @@ func (s *InstanceModeSuite) TestExposedApplicationWithExposedEndpoints(c *gc.C) 
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	// Create a space with a single subnet.
@@ -1788,7 +1838,8 @@ func (s *InstanceModeSuite) TestExposedApplicationWithExposedEndpointsWhenSpaceT
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	// Create two spaces and add a subnet to each one
@@ -1870,7 +1921,8 @@ func (s *InstanceModeSuite) TestExposedApplicationWithExposedEndpointsWhenSpaceD
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	// Create two spaces and add a subnet to each one
@@ -1940,7 +1992,8 @@ func (s *InstanceModeSuite) TestExposedApplicationWithExposedEndpointsWhenSpaceH
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	// Create a space with a single subnet.
@@ -2001,8 +2054,9 @@ func (s *InstanceModeSuite) TestExposeToIPV6CIDRsOnIPV4OnlyProvider(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
+	var wg sync.WaitGroup
 	s.withIpv6 = false
-	fw := s.newFirewaller(c, ctrl)
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	app := s.addApplication(ctrl, "wordpress", true)
@@ -2042,7 +2096,8 @@ func (s *GlobalModeSuite) TestStartStop(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	s.waitForMachine(c, "0")
 	// Initial run.
 	s.waitForModelFlush(c)
@@ -2055,7 +2110,8 @@ func (s *GlobalModeSuite) TestGlobalMode(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	app1 := s.addApplication(ctrl, "wordpress", true)
@@ -2108,7 +2164,8 @@ func (s *GlobalModeSuite) TestStartWithUnexposedApplication(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	s.ensureMocks(c, ctrl)
+	var wg sync.WaitGroup
+	s.ensureMocks(c, ctrl, &wg)
 
 	app := s.addApplication(ctrl, "wordpress", false)
 	u, m, _ := s.addUnit(c, ctrl, app)
@@ -2119,7 +2176,7 @@ func (s *GlobalModeSuite) TestStartWithUnexposedApplication(c *gc.C) {
 	})
 
 	// Starting the firewaller, no open ports.
-	fw := s.newFirewaller(c, ctrl)
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	s.assertEnvironPorts(c, nil)
@@ -2139,7 +2196,8 @@ func (s *GlobalModeSuite) TestRestart(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	app := s.addApplication(ctrl, "wordpress", true)
@@ -2175,7 +2233,7 @@ func (s *GlobalModeSuite) TestRestart(c *gc.C) {
 	app.EXPECT().ExposeInfo().Return(true, map[string]params.ExposedEndpoint{
 		allEndpoints: {ExposeToCIDRs: []string{firewall.AllNetworksIPV4CIDR}}}, nil)
 
-	fw = s.newFirewaller(c, ctrl)
+	fw = s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	s.machinesCh <- []string{m.Tag().Id()}
@@ -2192,7 +2250,8 @@ func (s *GlobalModeSuite) TestRestartUnexposedApplication(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	app := s.addApplication(ctrl, "wordpress", true)
@@ -2222,7 +2281,7 @@ func (s *GlobalModeSuite) TestRestartUnexposedApplication(c *gc.C) {
 	s.envModelFirewaller.EXPECT().ModelIngressRules(gomock.Any()).Return(firewall.IngressRules{}, nil)
 	u.EXPECT().Life().Return(life.Alive)
 
-	fw = s.newFirewaller(c, ctrl)
+	fw = s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	s.machinesCh <- []string{m.Tag().Id()}
@@ -2236,7 +2295,8 @@ func (s *GlobalModeSuite) TestRestartPortCount(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
-	fw := s.newFirewaller(c, ctrl)
+	var wg sync.WaitGroup
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	app1 := s.addApplication(ctrl, "wordpress", true)
@@ -2272,7 +2332,7 @@ func (s *GlobalModeSuite) TestRestartPortCount(c *gc.C) {
 	u2.EXPECT().Life().Return(life.Alive)
 
 	// Start firewaller and check port.
-	fw = s.newFirewaller(c, ctrl)
+	fw = s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	s.machinesCh <- []string{m1.Tag().Id(), m2.Tag().Id()}
@@ -2311,8 +2371,9 @@ func (s *GlobalModeSuite) TestExposeToIPV6CIDRsOnIPV4OnlyProvider(c *gc.C) {
 	ctrl := gomock.NewController(c)
 	defer ctrl.Finish()
 
+	var wg sync.WaitGroup
 	s.withIpv6 = false
-	fw := s.newFirewaller(c, ctrl)
+	fw := s.newFirewaller(c, ctrl, &wg)
 	defer workertest.CleanKill(c, fw)
 
 	app := s.addApplication(ctrl, "wordpress", true)

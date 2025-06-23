@@ -5,16 +5,17 @@ package firewaller
 
 import (
 	stdcontext "context"
+	"log"
 	"sort"
 	"time"
 
 	"github.com/EvilSuperstars/go-cidrman"
 	"github.com/go-macaroon-bakery/macaroon-bakery/v3/bakery"
-	"github.com/juju/charm/v11"
+	"github.com/juju/charm/v12"
 	"github.com/juju/clock"
 	"github.com/juju/collections/set"
 	"github.com/juju/errors"
-	"github.com/juju/names/v4"
+	"github.com/juju/names/v5"
 	"github.com/juju/worker/v3"
 	"github.com/juju/worker/v3/catacomb"
 	"gopkg.in/macaroon.v2"
@@ -29,8 +30,8 @@ import (
 	"github.com/juju/juju/environs"
 	"github.com/juju/juju/environs/config"
 	"github.com/juju/juju/environs/instances"
+	"github.com/juju/juju/internal/worker/common"
 	"github.com/juju/juju/rpc/params"
-	"github.com/juju/juju/worker/common"
 )
 
 type newCrossModelFacadeFunc func(*api.Info) (CrossModelFirewallerFacadeCloser, error)
@@ -60,8 +61,11 @@ type Config struct {
 	// should only be used for testing.
 	WatchMachineNotify func(tag names.MachineTag)
 	// FlushModelNotify is called when the Firewaller flushes it's model.
-	// This should only be used for testing
+	// This should only be used for testing.
 	FlushModelNotify func()
+	// SkipFlushModelNotify is called when the Firewaller skips flushing it's model.
+	// This should only be used for testing.
+	SkipFlushModelNotify func()
 	// FlushMMachineNotify is called when the Firewaller flushes a machine.
 	// This should only be used for testing
 	FlushMachineNotify func(string)
@@ -123,6 +127,7 @@ type Firewaller struct {
 	// Set to true if the environment supports ingress rules containing
 	// IPV6 CIDRs.
 	envIPV6CIDRSupport bool
+	needsToFlushModel  bool
 
 	modelUUID                  string
 	newRemoteFirewallerAPIFunc newCrossModelFacadeFunc
@@ -130,15 +135,16 @@ type Firewaller struct {
 	localRelationsChange       chan *remoteRelationNetworkChange
 	relationIngress            map[names.RelationTag]*remoteRelationData
 	relationWorkerRunner       *worker.Runner
-	pollClock                  clock.Clock
+	clk                        clock.Clock
 	logger                     Logger
 
 	cloudCallContextFunc common.CloudCallContextFunc
 
 	// Only used for testing
-	watchMachineNotify func(tag names.MachineTag)
-	flushModelNotify   func()
-	flushMachineNotify func(string)
+	watchMachineNotify   func(tag names.MachineTag)
+	flushModelNotify     func()
+	flushMachineNotify   func(string)
+	skipFlushModelNotify func()
 }
 
 // NewFirewaller returns a new Firewaller.
@@ -167,10 +173,11 @@ func NewFirewaller(cfg Config) (worker.Worker, error) {
 		exposedChange:              make(chan *exposedChange),
 		relationIngress:            make(map[names.RelationTag]*remoteRelationData),
 		localRelationsChange:       make(chan *remoteRelationNetworkChange),
-		pollClock:                  clk,
+		clk:                        clk,
 		logger:                     cfg.Logger,
 		relationWorkerRunner: worker.NewRunner(worker.RunnerParams{
-			Clock: clk,
+			Clock:  clk,
+			Logger: cfg.Logger,
 
 			// One of the remote relation workers failing should not
 			// prevent the others from running.
@@ -183,6 +190,7 @@ func NewFirewaller(cfg Config) (worker.Worker, error) {
 		watchMachineNotify:   cfg.WatchMachineNotify,
 		flushModelNotify:     cfg.FlushModelNotify,
 		flushMachineNotify:   cfg.FlushMachineNotify,
+		skipFlushModelNotify: cfg.SkipFlushModelNotify,
 	}
 
 	switch cfg.Mode {
@@ -203,6 +211,10 @@ func NewFirewaller(cfg Config) (worker.Worker, error) {
 		return nil, errors.Trace(err)
 	}
 	return fw, nil
+}
+
+func (fw *Firewaller) NeedsToFlushModel() bool {
+	return fw.needsToFlushModel
 }
 
 func (fw *Firewaller) setUp() error {
@@ -270,6 +282,7 @@ func (fw *Firewaller) loop() error {
 	var modelFirewallChanges watcher.NotifyChannel
 	if fw.modelFirewallWatcher != nil {
 		modelFirewallChanges = fw.modelFirewallWatcher.Changes()
+		log.Println("initialized modelFirewallChanges")
 	}
 
 	for {
@@ -277,6 +290,7 @@ func (fw *Firewaller) loop() error {
 		case <-fw.catacomb.Dying():
 			return fw.catacomb.ErrDying()
 		case change, ok := <-fw.machinesWatcher.Changes():
+			log.Println("[loop] got smth in machinesWatcher", change)
 			if !ok {
 				return errors.New("machines watcher closed")
 			}
@@ -334,6 +348,7 @@ func (fw *Firewaller) loop() error {
 				return errors.Trace(err)
 			}
 		case _, ok := <-modelFirewallChanges:
+			log.Println("[loop] got smth in modelFirewallChanges")
 			if !ok {
 				return errors.New("model config watcher closed")
 			}
@@ -791,6 +806,15 @@ func (fw *Firewaller) flushUnits(unitds []*unitData) error {
 
 // flushMachine opens and closes ports for the passed machine.
 func (fw *Firewaller) flushMachine(machined *machineData) error {
+	log.Println("inside flushMachine")
+	// We may have received a notification to flushModel() in the past but did not have any machines yet.
+	// Call flushModel() now.
+	if fw.needsToFlushModel {
+		if err := fw.flushModel(); err != nil {
+			return errors.Trace(err)
+		}
+	}
+
 	defer func() {
 		if fw.flushMachineNotify != nil {
 			fw.flushMachineNotify(machined.tag.Id())
@@ -1040,8 +1064,24 @@ func (fw *Firewaller) flushGlobalPorts(rawOpen, rawClose firewall.IngressRules) 
 
 func (fw *Firewaller) flushModel() error {
 	if fw.environModelFirewaller == nil {
-		return errors.NotSupportedf("model firewaller")
+		return nil
 	}
+
+	log.Println("[flushModel] fw.machineds", fw.machineds)
+
+	// Model specific artefacts shouldn't be created until the model contains at least one machine.
+	if len(fw.machineds) == 0 {
+		log.Println("got no machines so shouldn't flush model")
+		fw.needsToFlushModel = true
+		if fw.skipFlushModelNotify != nil {
+			fw.skipFlushModelNotify()
+		}
+		fw.logger.Debugf("skipping flushing model because there are no machines for this model")
+		return nil
+	}
+	// Reset the flag because the models are being flushed now.
+	fw.needsToFlushModel = false
+
 	want, err := fw.firewallerApi.ModelFirewallRules()
 	if err != nil {
 		return errors.Trace(err)
@@ -1071,6 +1111,7 @@ func (fw *Firewaller) flushModel() error {
 		}
 	}
 	if fw.flushModelNotify != nil {
+		log.Println("gonna call flushModelNotify()")
 		fw.flushModelNotify()
 	}
 	return nil
@@ -1754,7 +1795,7 @@ func (p *remoteRelationPoller) pollLoop() error {
 		select {
 		case <-p.catacomb.Dying():
 			return p.catacomb.ErrDying()
-		case <-p.fw.pollClock.After(3 * time.Second):
+		case <-p.fw.clk.After(3 * time.Second):
 			// Relation is exported with the consuming model UUID.
 			relToken, err := p.fw.remoteRelationsApi.GetToken(p.relationTag)
 			if err != nil {
