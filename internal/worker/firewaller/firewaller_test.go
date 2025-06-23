@@ -153,7 +153,7 @@ func (s *firewallerBaseSuite) ensureMocks(c *gc.C, ctrl *gomock.Controller, wg *
 		log.Println("[ensureMocks] sending initial event to modelFwRulesCh")
 		go func() {
 			log.Println("waiting...")
-			//wg.Wait()
+			wg.Wait()
 			log.Println("done waiting")
 			s.modelFwRulesCh <- struct{}{}
 		}()
