@@ -40,8 +40,6 @@ import (
 	"github.com/juju/juju/internal/worker/firewaller/mocks"
 	"github.com/juju/juju/rpc/params"
 	coretesting "github.com/juju/juju/testing"
-	"github.com/juju/juju/worker/firewaller"
-	"github.com/juju/juju/worker/firewaller/mocks"
 )
 
 const allEndpoints = ""
