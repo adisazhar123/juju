@@ -32,6 +32,8 @@ type Resource interface {
 	Get(ctx context.Context) error
 	// Delete removes the resource.
 	Delete(ctx context.Context) error
+	// DeleteOrphan removes the resource but keeps dependent objects as orphans.
+	DeleteOrphan(ctx context.Context) error
 	// String returns a string format containing the name and type of the resource.
 	String() string
 	// ComputeStatus returns a juju status for the resource.
@@ -46,6 +48,8 @@ type Applier interface {
 	Apply(...Resource)
 	// Delete adds delete operations to the applier.
 	Delete(...Resource)
+	// DeleteOrphan adds deleteorphan operations to the applier.
+	DeleteOrphan(...Resource)
 	// ApplySet deletes Resources in the current slice that don't exist in the
 	// desired slice. All items in the desired slice are applied.
 	ApplySet(current []Resource, desired []Resource)

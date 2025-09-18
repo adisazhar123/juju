@@ -39,6 +39,10 @@ func NewValidatingWebhookConfig(client admissionclient.ValidatingWebhookConfigur
 	}
 }
 
+func (v *ValidatingWebhookConfiguration) DeleteOrphan(ctx context.Context) error {
+	return nil
+}
+
 // Clone returns a copy of the resource.
 func (v *ValidatingWebhookConfiguration) Clone() Resource {
 	clone := *v

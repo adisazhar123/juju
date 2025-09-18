@@ -37,6 +37,10 @@ func NewClusterRoleBinding(client rbacv1client.ClusterRoleBindingInterface, name
 	return &ClusterRoleBinding{client, *in}
 }
 
+func (rb *ClusterRoleBinding) DeleteOrphan(ctx context.Context) error {
+	return nil
+}
+
 // Clone returns a copy of the resource.
 func (rb *ClusterRoleBinding) Clone() Resource {
 	clone := *rb

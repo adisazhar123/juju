@@ -37,6 +37,10 @@ func NewService(client v1.ServiceInterface, namespace string, name string, in *c
 	return &Service{client: client, Service: *in}
 }
 
+func (s *Service) DeleteOrphan(ctx context.Context) error {
+	return nil
+}
+
 // Clone returns a copy of the resource.
 func (s *Service) Clone() Resource {
 	clone := *s

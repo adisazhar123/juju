@@ -39,6 +39,10 @@ func NewMutatingWebhookConfig(client admissionclient.MutatingWebhookConfiguratio
 	}
 }
 
+func (m *MutatingWebhookConfiguration) DeleteOrphan(ctx context.Context) error {
+	return nil
+}
+
 // Clone returns a copy of the resource.
 func (m *MutatingWebhookConfiguration) Clone() Resource {
 	clone := *m

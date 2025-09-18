@@ -39,6 +39,10 @@ func NewIngress(client netv1client.IngressInterface, name string, in *netv1.Ingr
 	}
 }
 
+func (ig *Ingress) DeleteOrphan(ctx context.Context) error {
+	return nil
+}
+
 // Clone returns a copy of the resource.
 func (ig *Ingress) Clone() Resource {
 	clone := *ig

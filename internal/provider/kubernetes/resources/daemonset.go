@@ -36,6 +36,10 @@ func NewDaemonSet(client v1.DaemonSetInterface, namespace string, name string, i
 	return &DaemonSet{client, *in}
 }
 
+func (ds *DaemonSet) DeleteOrphan(ctx context.Context) error {
+	return nil
+}
+
 // Clone returns a copy of the resource.
 func (ds *DaemonSet) Clone() Resource {
 	clone := *ds

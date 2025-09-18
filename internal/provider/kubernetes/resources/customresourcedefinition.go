@@ -37,6 +37,10 @@ func NewCustomResourceDefinition(client v1.CustomResourceDefinitionInterface, na
 	}
 }
 
+func (crd *CustomResourceDefinition) DeleteOrphan(ctx context.Context) error {
+	return nil
+}
+
 // Clone returns a copy of the resource.
 func (crd *CustomResourceDefinition) Clone() Resource {
 	clone := *crd

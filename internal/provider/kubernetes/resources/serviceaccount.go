@@ -36,6 +36,10 @@ func NewServiceAccount(client v1.ServiceAccountInterface, namespace string, name
 	return &ServiceAccount{client, *in}
 }
 
+func (sa *ServiceAccount) DeleteOrphan(ctx context.Context) error {
+	return nil
+}
+
 // Clone returns a copy of the resource.
 func (sa *ServiceAccount) Clone() Resource {
 	clone := *sa

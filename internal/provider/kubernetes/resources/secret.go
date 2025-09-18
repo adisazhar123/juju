@@ -55,6 +55,10 @@ func ListSecrets(ctx context.Context, client v1.SecretInterface, namespace strin
 	return items, nil
 }
 
+func (s *Secret) DeleteOrphan(ctx context.Context) error {
+	return nil
+}
+
 // Clone returns a copy of the resource.
 func (s *Secret) Clone() Resource {
 	clone := *s

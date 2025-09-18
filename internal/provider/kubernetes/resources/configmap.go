@@ -39,6 +39,10 @@ func NewConfigMap(client core.ConfigMapInterface, name string, in *corev1.Config
 	}
 }
 
+func (cm *ConfigMap) DeleteOrphan(ctx context.Context) error {
+	return nil
+}
+
 // Clone returns a copy of the resource.
 func (cm *ConfigMap) Clone() Resource {
 	clone := *cm

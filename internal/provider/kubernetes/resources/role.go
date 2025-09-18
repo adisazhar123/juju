@@ -36,6 +36,10 @@ func NewRole(client rbacv1client.RoleInterface, namespace string, name string, i
 	return &Role{client, *in}
 }
 
+func (r *Role) DeleteOrphan(ctx context.Context) error {
+	return nil
+}
+
 // Clone returns a copy of the resource.
 func (r *Role) Clone() Resource {
 	clone := *r

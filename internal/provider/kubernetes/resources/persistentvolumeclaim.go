@@ -57,6 +57,10 @@ func ListPersistentVolumeClaims(ctx context.Context, client kubernetes.Interface
 	return items, nil
 }
 
+func (pvc *PersistentVolumeClaim) DeleteOrphan(ctx context.Context) error {
+	return nil
+}
+
 // Clone returns a copy of the resource.
 func (pvc *PersistentVolumeClaim) Clone() Resource {
 	clone := *pvc

@@ -36,6 +36,10 @@ func NewDeployment(client v1.DeploymentInterface, namespace string, name string,
 	return &Deployment{client, *in}
 }
 
+func (d *Deployment) DeleteOrphan(ctx context.Context) error {
+	return nil
+}
+
 // Clone returns a copy of the resource.
 func (d *Deployment) Clone() Resource {
 	clone := *d

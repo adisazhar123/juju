@@ -36,6 +36,10 @@ func NewRoleBinding(client rbacv1client.RoleBindingInterface, namespace string, 
 	return &RoleBinding{client, *in}
 }
 
+func (rb *RoleBinding) DeleteOrphan(ctx context.Context) error {
+	return nil
+}
+
 // Clone returns a copy of the resource.
 func (rb *RoleBinding) Clone() Resource {
 	clone := *rb

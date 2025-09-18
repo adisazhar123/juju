@@ -433,6 +433,18 @@ func (a *app) Ensure(config caas.ApplicationConfig) (err error) {
 	return applier.Run(context.Background(), false)
 }
 
+func (a *app) DeleteSTSAndApplyNewPVC(config caas.ApplicationConfig) (err error) {
+	sts, err := a.getStatefulSet()
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	applier := a.newApplier()
+	applier.DeleteOrphan(sts)
+
+	applier.Apply()
+}
+
 func (a *app) applyServiceAccountAndSecrets(applier resources.Applier, config caas.ApplicationConfig) error {
 	sec := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{

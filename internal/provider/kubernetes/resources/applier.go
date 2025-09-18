@@ -37,6 +37,7 @@ type opType int
 const (
 	opApply opType = iota
 	opDelete
+	opDeleteOrphan
 )
 
 type operation struct {
@@ -118,6 +119,23 @@ func (op *operation) process(ctx context.Context, rollback Applier) error {
 		if err == nil {
 			rollback.Apply(existingRes)
 		}
+	case opDeleteOrphan:
+		err = op.resource.DeleteOrphan(ctx)
+		// We do not need to rollback for not found errors.
+		if errors.Is(err, errors.NotFound) {
+			return nil
+		}
+
+		if err != nil {
+			err = errors.Annotatef(err, "deleting resource %q with orphan", op.resource.ID().Name)
+		}
+
+		// Do not rollback if the resource is not found.
+		// There is still an unresolved issue of potential data race here,
+		// but we preserve the existing rollback behavior.
+		if err == nil {
+			rollback.Apply(existingRes)
+		}
 	}
 
 	return errors.Trace(err)
@@ -132,6 +150,12 @@ func (a *applier) Apply(resources ...Resource) {
 func (a *applier) Delete(resources ...Resource) {
 	for _, r := range resources {
 		a.ops = append(a.ops, operation{opDelete, r})
+	}
+}
+
+func (a *applier) DeleteOrphan(resources ...Resource) {
+	for _, r := range resources {
+		a.ops = append(a.ops, operation{opDeleteOrphan, r})
 	}
 }
 

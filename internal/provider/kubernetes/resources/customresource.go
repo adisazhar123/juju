@@ -38,6 +38,10 @@ func NewCustomResource(client dynamic.ResourceInterface, name string, in *unstru
 	}
 }
 
+func (cr *CustomResource) DeleteOrphan(ctx context.Context) error {
+	return nil
+}
+
 // Clone returns a copy of the resource.
 func (cr *CustomResource) Clone() Resource {
 	clone := *cr

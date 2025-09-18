@@ -54,6 +54,10 @@ func ListStorageClass(ctx context.Context, client v1.StorageClassInterface, opts
 	return items, nil
 }
 
+func (sc *StorageClass) DeleteOrphan(ctx context.Context) error {
+	return nil
+}
+
 // Clone returns a copy of the resource.
 func (sc *StorageClass) Clone() Resource {
 	clone := *sc

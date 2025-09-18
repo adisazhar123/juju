@@ -60,6 +60,10 @@ func ListPods(ctx context.Context, client kubernetes.Interface, namespace string
 	return items, nil
 }
 
+func (p *Pod) DeleteOrphan(ctx context.Context) error {
+	return nil
+}
+
 // Clone returns a copy of the resource.
 func (p *Pod) Clone() Resource {
 	clone := *p

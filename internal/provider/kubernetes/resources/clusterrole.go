@@ -26,6 +26,10 @@ type ClusterRole struct {
 	rbacv1.ClusterRole
 }
 
+func (r *ClusterRole) DeleteOrphan(ctx context.Context) error {
+	return nil
+}
+
 // NewClusterRole creates a new cluster role resource.
 func NewClusterRole(client rbacv1client.ClusterRoleInterface, name string, in *rbacv1.ClusterRole) *ClusterRole {
 	if in == nil {

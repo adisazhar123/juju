@@ -35,6 +35,10 @@ func NewPersistentVolume(client v1.PersistentVolumeInterface, name string, in *c
 	return &PersistentVolume{client, *in}
 }
 
+func (pv *PersistentVolume) DeleteOrphan(ctx context.Context) error {
+	return nil
+}
+
 // Clone returns a copy of the resource.
 func (pv *PersistentVolume) Clone() Resource {
 	clone := *pv
