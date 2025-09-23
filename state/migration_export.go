@@ -517,6 +517,7 @@ func (e *exporter) newMachine(exParent description.Machine, machine *Machine, in
 	exMachine.SetPreferredAddresses(
 		e.newAddressArgs(machine.doc.PreferredPublicAddress),
 		e.newAddressArgs(machine.doc.PreferredPrivateAddress))
+	exMachine.SetHostname(machine.doc.Hostname)
 
 	// We fully expect the machine to have tools set, and that there is
 	// some instance data.

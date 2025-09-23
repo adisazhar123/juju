@@ -14,6 +14,8 @@ run_model_migration() {
 
 	wait_for "ubuntu" "$(idle_condition "ubuntu")"
 
+	hostname=$(juju status --format json | jq -r '.machines["0"] | .hostname')
+
 	# create user secrets.
 	user_secret_uri=$(juju --show-log add-secret mysecret owned-by="model" --info "this is a user secret")
 	user_secret_short_uri=${user_secret_uri##*:}
@@ -57,6 +59,9 @@ run_model_migration() {
 	unit_owned_secret_uri1=$(juju exec --unit ubuntu/0 -- secret-add --owner unit owned-by=ubuntu/0)
 	unit_owned_secret_short_uri1=${unit_owned_secret_uri1##*:}
 	check_contains "$(juju exec --unit "ubuntu/0" -- secret-get $unit_owned_secret_short_uri1)" "owned-by: ubuntu/0"
+
+  # Check the hostname is the same.
+  juju status --format json | jq -r '.machines["0"] | .hostname' | check "$hostname"
 
 	# Add a unit to ubuntu to ensure the model is functional
 	juju add-unit ubuntu

@@ -754,6 +754,7 @@ func (i *importer) makeMachineDoc(m description.Machine) (*machineDoc, error) {
 		SupportedContainersKnown: supportedSet,
 		SupportedContainers:      supportedContainers,
 		Placement:                m.Placement(),
+		Hostname:                 m.Hostname(),
 	}, nil
 }
 
