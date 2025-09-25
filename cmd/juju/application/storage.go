@@ -220,7 +220,7 @@ func (c *storageConfigCommand) getConfig(client StorageConstraintsAPI, ctx *cmd.
 		return errors.NotFoundf("storage %q", storeKey)
 	}
 
-	// Convert it to a the desired map format so that the output package can format it.
+	// Convert it to the desired map format so that the output package can format it.
 	storageConsForKeyMap := map[string]storage.Constraints{
 		storeKey: storageConsForKey,
 	}
