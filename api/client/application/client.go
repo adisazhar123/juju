@@ -1223,11 +1223,10 @@ func paramsFromDeployFromRepositoryArg(arg DeployFromRepositoryArg) params.Deplo
 
 // ApplicationStorageInfo contains the storage information for an application.
 type ApplicationStorageInfo struct {
-	Error error
 	// StorageConstraints is a map of storage names to storage constraints to
 	// update during the upgrade. This field is only understood by Application
 	// facade version 2 and greater.
-	StorageConstraints map[string]storage.Constraints `json:"storage-constraints,omitempty"`
+	StorageConstraints map[string]storage.Constraints
 }
 
 // GetApplicationStorage retrieves storage information for the specified applications.
@@ -1242,15 +1241,14 @@ func (c *Client) GetApplicationStorage(applicationName string) (ApplicationStora
 	if resultsLen := len(out.Results); resultsLen != 1 {
 		return ApplicationStorageInfo{}, errors.Errorf("expected 1 result, got %d", resultsLen)
 	}
-	return applicationInfoFromParams(out.Results[0]), nil
+	res := out.Results[0]
+	if res.Error != nil {
+		return ApplicationStorageInfo{}, apiservererrors.RestoreError(res.Error)
+	}
+	return applicationInfoFromParams(res), nil
 }
 
 func applicationInfoFromParams(param params.ApplicationStorageGetResult) ApplicationStorageInfo {
-	if param.Error != nil {
-		return ApplicationStorageInfo{
-			Error: apiservererrors.RestoreError(param.Error),
-		}
-	}
 	sc := make(map[string]storage.Constraints)
 	for k, v := range param.StorageConstraints {
 		con := storage.Constraints{
@@ -1277,7 +1275,7 @@ type ApplicationStorageUpdate struct {
 	// StorageConstraints is a map of storage names to storage constraints to
 	// update during the upgrade. This field is only understood by Application
 	// facade version 2 and greater.
-	StorageConstraints map[string]storage.Constraints `json:"storage-constraints,omitempty"`
+	StorageConstraints map[string]storage.Constraints
 }
 
 // UpdateApplicationStorage updates the storage constraints for multiple existing applications in bulk.
