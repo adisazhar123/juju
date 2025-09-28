@@ -407,6 +407,7 @@ func (a *appWorker) loop() error {
 			}
 			shouldRefresh = false
 		case <-stateAppChangedChan:
+			a.logger.Infof("[adis][loop] received stateAppChangedChan")
 			// Respond to life changes (Notify called by parent worker).
 			err = handleChange()
 			if errors.Is(err, tryAgain) {
@@ -442,10 +443,11 @@ func (a *appWorker) loop() error {
 				storageConstraintsChan = nil
 				break
 			}
-			err := a.ops.ReconcileApplicationStorage(a.name, app, a.facade, a.logger)
-			if err != nil {
-				return errors.Trace(err)
-			}
+			a.logger.Infof("[adis][loop] received storageConstraintsChan")
+			//err := a.ops.ReconcileApplicationStorage(a.name, app, a.facade, a.logger)
+			//if err != nil {
+			//	return errors.Trace(err)
+			//}
 		case <-a.clock.After(10 * time.Second):
 			// Force refresh of application status.
 		}

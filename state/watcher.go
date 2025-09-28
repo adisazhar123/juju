@@ -1990,21 +1990,26 @@ func (a *Application) Watch() NotifyWatcher {
 // WatchStorageConstraints returns a watcher for observing changes to an
 // application's storage constraints.
 func (a *Application) WatchStorageConstraints() (NotifyWatcher, error) {
+	logger.Infof("[adis][WatchStorageConstraints] for app %q", a.Name())
 	current, err := a.StorageConstraints()
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	logger.Infof("[adis][WatchStorageConstraints] curent for app %q is %+v", a.Name(), current)
 	filter := func(id interface{}) bool {
 		id, ok := id.(string)
 		if !ok {
+			watchLogger.Infof("[adis][filter][insert] app %q. id not string", a.Name())
 			return false
 		}
 		localID, err := a.st.strictLocalID(id.(string))
 		if err != nil {
+			watchLogger.Infof("[adis][filter][insert] app %q. strictLocalID err: %+v", a.Name(), err)
 			return false
 		}
 		parts := strings.Split(localID, "#")
 		if len(parts) != 3 {
+			watchLogger.Infof("[adis][filter][insert] app %q. parts not enough", a.Name())
 			return false
 		}
 
@@ -2013,20 +2018,23 @@ func (a *Application) WatchStorageConstraints() (NotifyWatcher, error) {
 		key := parts[0] + "#" + parts[1] + "#"
 		appMatched := strings.HasPrefix(a.storageConstraintsKey(), key)
 		if !appMatched {
+			watchLogger.Infof("[adis][filter][insert] app %q. app not matched. key: %q, storageconstkey: %q", a.Name(), key, a.storageConstraintsKey())
 			return false
 		}
 
 		storageCons, err := a.StorageConstraints()
 		if err != nil {
+			watchLogger.Infof("[adis][filter][insert] app %q. err get storagecons: %+v", a.Name(), err)
 			return false
 		}
 		if current == nil && storageCons != nil {
-			logger.Infof("[adis] storage constraint insertion: %+v", storageCons)
+			watchLogger.Infof("[adis][filter][insert] app %q. storageCons: %+v", a.Name(), storageCons)
 			current = storageCons
 			return false
 		}
 
 		contentChanged := !maps.Equal(current, storageCons)
+		watchLogger.Infof("[adis][filter][update] app %q. contentChanged: %t current: %+v, storateCons: %+v", a.Name(), contentChanged, current, storageCons)
 		current = storageCons
 		return contentChanged
 	}
