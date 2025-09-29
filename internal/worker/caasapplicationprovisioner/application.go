@@ -5,6 +5,7 @@ package caasapplicationprovisioner
 
 import (
 	"fmt"
+	"github.com/juju/juju/storage"
 	"time"
 
 	"github.com/juju/clock"
@@ -35,13 +36,14 @@ type appWorker struct {
 	unitFacade CAASUnitProvisionerFacade
 	ops        ApplicationOps
 
-	name        string
-	modelTag    names.ModelTag
-	changes     chan struct{}
-	password    string
-	lastApplied caas.ApplicationConfig
-	life        life.Value
-	statusOnly  bool
+	name                   string
+	modelTag               names.ModelTag
+	changes                chan struct{}
+	password               string
+	lastApplied            caas.ApplicationConfig
+	lastAppliedFilesystems []storage.KubernetesFilesystemParams
+	life                   life.Value
+	statusOnly             bool
 }
 
 type AppWorkerConfig struct {
@@ -254,6 +256,7 @@ func (a *appWorker) loop() error {
 				appProvisionChanges = appProvisionWatcher.Changes()
 			}
 			if !a.statusOnly {
+				a.logger.Infof("[adis][loop] calling AppAlive app: %q", a.name)
 				err = a.ops.AppAlive(a.name, app, a.password, &a.lastApplied, a.facade, a.clock, a.logger)
 				if errors.Is(err, errors.NotProvisioned) {
 					// State not ready for this application to be provisioned yet.
@@ -434,6 +437,7 @@ func (a *appWorker) loop() error {
 			if !ok {
 				return fmt.Errorf("application %q storage constraints watcher closed channel", a.name)
 			}
+			a.logger.Infof("[adis][loop] received storagecons changes")
 			if storageConstraintsChan == nil {
 				storageConstraintsChan = a.clock.After(0)
 			}
@@ -444,10 +448,12 @@ func (a *appWorker) loop() error {
 				break
 			}
 			a.logger.Infof("[adis][loop] received storageConstraintsChan")
-			//err := a.ops.ReconcileApplicationStorage(a.name, app, a.facade, a.logger)
-			//if err != nil {
-			//	return errors.Trace(err)
-			//}
+			err := a.ops.ReconcileApplicationStorage(a.name, app, a.facade, &a.lastAppliedFilesystems, a.logger)
+			if err != nil {
+				a.logger.Infof("[adis][ReconcileApplicationStorage] err: %+v", err)
+				return errors.Trace(err)
+			}
+			storageConstraintsChan = nil
 		case <-a.clock.After(10 * time.Second):
 			// Force refresh of application status.
 		}
