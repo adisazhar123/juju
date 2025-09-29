@@ -21,6 +21,7 @@ import (
 	"github.com/juju/juju/core/life"
 	"github.com/juju/juju/core/status"
 	"github.com/juju/juju/rpc/params"
+	"github.com/juju/juju/storage"
 )
 
 // ApplicationOps defines all the operations the application worker can perform.
@@ -59,7 +60,7 @@ type ApplicationOps interface {
 	EnsureScale(appName string, app caas.Application, appLife life.Value,
 		facade CAASProvisionerFacade, unitFacade CAASUnitProvisionerFacade, logger Logger) error
 
-	ReconcileApplicationStorage(appName string, app caas.Application, facade CAASProvisionerFacade, logger Logger) error
+	ReconcileApplicationStorage(appName string, app caas.Application, facade CAASProvisionerFacade, lastApplied *[]storage.KubernetesFilesystemParams, logger Logger) error
 }
 
 type applicationOps struct {
@@ -120,8 +121,8 @@ func (applicationOps) EnsureScale(appName string, app caas.Application, appLife 
 	return ensureScale(appName, app, appLife, facade, unitFacade, logger)
 }
 
-func (applicationOps) ReconcileApplicationStorage(appName string, app caas.Application, facade CAASProvisionerFacade, logger Logger) error {
-	return reconcileApplicationStorage(appName, app, facade, logger)
+func (applicationOps) ReconcileApplicationStorage(appName string, app caas.Application, facade CAASProvisionerFacade, lastApplied *[]storage.KubernetesFilesystemParams, logger Logger) error {
+	return reconcileApplicationStorage(appName, app, facade, lastApplied, logger)
 }
 
 type Tomb interface {
@@ -758,8 +759,8 @@ func ensureScale(appName string, app caas.Application, appLife life.Value,
 	return nil
 }
 
-func reconcileApplicationStorage(appName string, app caas.Application, facade CAASProvisionerFacade, logger Logger) error {
-	logger.Debugf("reconciling application %q storage", appName)
+func reconcileApplicationStorage(appName string, app caas.Application, facade CAASProvisionerFacade, lastApplied *[]storage.KubernetesFilesystemParams, logger Logger) error {
+	logger.Infof("[adis] reconciling application %q storage, lastApplied: %+v", appName, lastApplied)
 
 	// Get filesystem provisioning info.
 	info, err := facade.FilesystemProvisioningInfo(appName)
@@ -767,6 +768,19 @@ func reconcileApplicationStorage(appName string, app caas.Application, facade CA
 		return errors.Trace(err)
 	}
 
+	// Set its initial value. It must be the first time it was invoked.
+	if lastApplied == nil {
+		*lastApplied = info.Filesystems
+		logger.Infof("[adis][reconcileappstorage] app: %q first time...", appName)
+		return nil
+	}
+	// TODO: enumerate lastapplied and filesystems and check the values
+	if reflect.DeepEqual(*lastApplied, info.Filesystems) {
+		logger.Infof("[adis][reconcileappstorage] app: %q no change lastapplied: %+v", appName, lastApplied)
+		return nil
+	}
+
+	*lastApplied = info.Filesystems
 	return app.ReconcileVolumes(info.Filesystems)
 }
 
