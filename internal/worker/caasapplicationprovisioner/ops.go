@@ -28,7 +28,7 @@ import (
 // This is exported for testing only.
 type ApplicationOps interface {
 	AppAlive(appName string, app caas.Application, password string, lastApplied *caas.ApplicationConfig,
-		facade CAASProvisionerFacade, clk clock.Clock, logger Logger) error
+		facade CAASProvisionerFacade, clk clock.Clock, logger Logger, stsDeleted bool) error
 
 	AppDying(appName string, app caas.Application, appLife life.Value,
 		facade CAASProvisionerFacade, unitFacade CAASUnitProvisionerFacade, logger Logger) error
@@ -67,8 +67,8 @@ type applicationOps struct {
 }
 
 func (applicationOps) AppAlive(appName string, app caas.Application, password string, lastApplied *caas.ApplicationConfig,
-	facade CAASProvisionerFacade, clk clock.Clock, logger Logger) error {
-	return appAlive(appName, app, password, lastApplied, facade, clk, logger)
+	facade CAASProvisionerFacade, clk clock.Clock, logger Logger, stsDeleted bool) error {
+	return appAlive(appName, app, password, lastApplied, facade, clk, logger, stsDeleted)
 }
 
 func (applicationOps) AppDying(appName string, app caas.Application, appLife life.Value,
@@ -133,8 +133,8 @@ type Tomb interface {
 // appAlive handles the life.Alive state for the CAAS application. It handles invoking the
 // CAAS broker to create the resources in the k8s cluster for this application.
 func appAlive(appName string, app caas.Application, password string, lastApplied *caas.ApplicationConfig,
-	facade CAASProvisionerFacade, clk clock.Clock, logger Logger) error {
-	logger.Debugf("ensuring application %q exists", appName)
+	facade CAASProvisionerFacade, clk clock.Clock, logger Logger, stsDeleted bool) error {
+	logger.Infof("[adis][appAlive] ensuring application %q exists", appName)
 
 	provisionInfo, err := facade.ProvisioningInfo(appName)
 	if err != nil {
@@ -222,6 +222,13 @@ func appAlive(appName string, app caas.Application, password string, lastApplied
 		// could delete this field. Should investigate refactoring.
 		InitialScale: 0,
 	}
+
+	// We have a special case where an STS is deleted (pods and PVCs are orphaned) due to a storage update.
+	// Therefore, we want to continue the replica to what it was before the delete.
+	if stsDeleted {
+		config.InitialScale = provisionInfo.Scale
+	}
+
 	switch ch.Meta().CharmUser {
 	case charm.RunAsDefault:
 		config.CharmUser = caas.RunAsDefault
@@ -769,18 +776,18 @@ func reconcileApplicationStorage(appName string, app caas.Application, facade CA
 	}
 
 	// Set its initial value. It must be the first time it was invoked.
-	if *lastApplied == nil {
-		*lastApplied = info.Filesystems
-		logger.Infof("[adis][reconcileappstorage] app: %q first time...", appName)
-		return nil
-	}
-	// TODO: enumerate lastapplied and filesystems and check the values
-	if reflect.DeepEqual(*lastApplied, info.Filesystems) {
-		logger.Infof("[adis][reconcileappstorage] app: %q no change lastapplied: %+v", appName, lastApplied)
-		return nil
-	}
-
-	*lastApplied = info.Filesystems
+	//if *lastApplied == nil {
+	//	*lastApplied = info.Filesystems
+	//	logger.Infof("[adis][reconcileappstorage] app: %q first time...", appName)
+	//	return nil
+	//}
+	//// TODO: enumerate lastapplied and filesystems and check the values
+	//if reflect.DeepEqual(*lastApplied, info.Filesystems) {
+	//	logger.Infof("[adis][reconcileappstorage] app: %q no change lastapplied: %+v", appName, lastApplied)
+	//	return nil
+	//}
+	//
+	//*lastApplied = info.Filesystems
 	return app.ReconcileVolumes(info.Filesystems)
 }
 

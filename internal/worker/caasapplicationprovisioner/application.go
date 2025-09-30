@@ -202,6 +202,7 @@ func (a *appWorker) loop() error {
 
 	var (
 		initial                = true
+		stsDeleted             = false
 		scaleChan              <-chan time.Time
 		scaleTries             int
 		trustChan              <-chan time.Time
@@ -257,7 +258,7 @@ func (a *appWorker) loop() error {
 			}
 			if !a.statusOnly {
 				a.logger.Infof("[adis][loop] calling AppAlive app: %q", a.name)
-				err = a.ops.AppAlive(a.name, app, a.password, &a.lastApplied, a.facade, a.clock, a.logger)
+				err = a.ops.AppAlive(a.name, app, a.password, &a.lastApplied, a.facade, a.clock, a.logger, stsDeleted)
 				if errors.Is(err, errors.NotProvisioned) {
 					// State not ready for this application to be provisioned yet.
 					// Usually because the charm has not yet been downloaded.
@@ -265,6 +266,7 @@ func (a *appWorker) loop() error {
 				} else if err != nil {
 					return errors.Trace(err)
 				}
+				stsDeleted = false
 			}
 			if appChanges == nil {
 				appWatcher, err := app.Watch()
@@ -410,7 +412,7 @@ func (a *appWorker) loop() error {
 			}
 			shouldRefresh = false
 		case <-stateAppChangedChan:
-			a.logger.Infof("[adis][loop] received stateAppChangedChan")
+			a.logger.Infof("[adis][loop] app %q received stateAppChangedChan", a.name)
 			// Respond to life changes (Notify called by parent worker).
 			err = handleChange()
 			if errors.Is(err, tryAgain) {
@@ -456,8 +458,15 @@ func (a *appWorker) loop() error {
 				} else {
 					return errors.Trace(err)
 				}
+			} else {
+				// Trigger the sts reapply.
+				if stateAppChangedChan == nil {
+					stsDeleted = true
+					stateAppChangedChan = a.clock.After(0)
+				}
+				storageConstraintsChan = nil
 			}
-			storageConstraintsChan = nil
+
 		case <-a.clock.After(10 * time.Second):
 			// Force refresh of application status.
 		}

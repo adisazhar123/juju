@@ -154,14 +154,14 @@ func (s *StatefulSetWithOrphanDelete) Delete(ctx context.Context) error {
 		return errors.NewNotFound(err, "k8s statefulset for deletion")
 	}
 	// K8s doesn't delete the sts immediately. Block until it's deleted.
-	err = wait.PollUntilContextTimeout(ctx, s.interval, s.timeout, true, func(ctx context.Context) (done bool, err error) {
+	err = wait.PollUntilContextTimeout(ctx, s.interval, s.timeout, true, func(ctx context.Context) (bool, error) {
 		logger.Infof("[adis][StatefulSetWithOrphanDelete] blocking until sts %q is deleted", s.Name)
 		getErr := s.Get(ctx)
 		if errors.Is(getErr, errors.NotFound) {
 			logger.Infof("[adis][StatefulSetWithOrphanDelete] sts %q is finally deleted ^_^", s.Name)
 			return true, nil
-		} else if err != nil {
-			return false, err
+		} else if getErr != nil {
+			return false, getErr
 		}
 		return false, nil
 	})
