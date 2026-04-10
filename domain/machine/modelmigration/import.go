@@ -53,6 +53,7 @@ type ImportService interface {
 	// CreateMachine creates the specified machine.
 	CreateMachine(
 		ctx context.Context,
+		hostname string,
 		machineName machine.Name,
 		nonce *string,
 		platform deployment.Platform,
@@ -129,6 +130,7 @@ func (i *importOperation) Execute(ctx context.Context, model description.Model) 
 		// We need skeleton machines in dqlite.
 		machineUUID, err := i.service.CreateMachine(
 			ctx,
+			m.Hostname(),
 			machine.Name(m.Id()),
 			new(m.Nonce()),
 			machinePlatform,

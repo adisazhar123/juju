@@ -72,6 +72,7 @@ func NewMigrationService(
 // already exists.
 func (s *MigrationService) CreateMachine(
 	ctx context.Context,
+	hostname string,
 	machineName coremachine.Name,
 	nonce *string,
 	platform deployment.Platform,
@@ -93,6 +94,7 @@ func (s *MigrationService) CreateMachine(
 		return "", errors.Errorf("creating net node UUID for machine %q: %w", machineName, err)
 	}
 	err = s.st.InsertMigratingMachine(ctx, machineName.String(), machine.CreateMachineArgs{
+		Hostname:    hostname,
 		MachineUUID: machineUUID,
 		NetNodeUUID: netNodeUUID,
 		Nonce:       nonce,
