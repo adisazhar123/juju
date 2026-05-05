@@ -11,6 +11,7 @@ import (
 
 	"github.com/juju/description/v11"
 	"github.com/juju/errors"
+	"github.com/juju/loggo"
 	"github.com/juju/names/v5"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/kubernetes"
@@ -61,6 +62,8 @@ type importModelFunc func(
 	model description.Model,
 ) (io.Closer, error)
 
+var logger = loggo.GetLogger("juju.apiserver.migrationtarget")
+
 // API implements the API required for the model migration
 // master worker when communicating with the target controller.
 type API struct {
@@ -101,6 +104,7 @@ func NewAPI(
 	st MigrationState,
 	auth facade.Authorizer,
 ) (*API, error) {
+	logger.Infof("[adis] new migrationtarget API")
 	if err := checkAuth(auth, st); err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -190,21 +194,27 @@ with an earlier version of the target controller and try again.
 // Import takes a serialized Juju model, deserializes it, and
 // recreates it in the receiving controller.
 func (api *API) Import(serialized params.SerializedModel) error {
+	logger.Infof("[adis][API][Import] received serialized model")
 	descriptionModel, err := description.Deserialize(serialized.Bytes)
 	if err != nil {
 		return errors.Annotate(err, "deserializing model for import")
 	}
 
+	logger.Infof("[adis][API][Import] model: %+v", descriptionModel)
 	if descriptionModel.Type() == model.CAAS.String() {
+		logger.Infof("[adis][API][Import] backfilling ids for caas")
 		err := api.backfillStorageUniqueIDs(descriptionModel)
 		if err != nil {
 			return errors.Annotate(err, "backfilling storage unique IDs")
 		}
 	}
 
+	logger.Infof("[adis][API][Import] going to instantiate controller")
+
 	controller := state.NewController(api.pool)
 	st, err := api.importModel(controller, api.getClaimer, descriptionModel)
 	if err != nil {
+		logger.Infof("[adis][API][Import] err from importModel: %s", err)
 		return err
 	}
 	defer st.Close()

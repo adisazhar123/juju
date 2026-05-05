@@ -54,6 +54,7 @@ func ImportModel(
 	getClaimer ClaimerFunc,
 	model description.Model,
 ) (io.Closer, error) {
+	logger.Infof("[adis][ImportModel] started...")
 	dbState, err := importer.Import(model)
 	if err != nil {
 		return nil, errors.Trace(err)
